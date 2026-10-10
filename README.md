@@ -256,7 +256,7 @@ git branch -M main
 git add .
 git commit -m "novel-tts Web: Edge TTS 纯前端 TypeScript 版本"
 
-git remote add origin https://github.com/norohime/Edge-TTS.git
+git remote add origin https://github.com/NoroHime/Edge-TTS.git
 git push -u origin main
 ```
 
