@@ -79,6 +79,11 @@ export function renderTemplate(root: HTMLElement): void {
             <option value="+50%">+50%</option>
           </select>
 
+          <label for="instruction">自定义指令</label>
+          <div class="field-row">
+            <input id="instruction" type="text" placeholder="可选；当前引擎不支持，仅作记录" autocomplete="off">
+          </div>
+
           <label for="max-chars">每段最大长度</label>
           <div class="field-row">
             <input id="max-chars" type="number" min="60" max="500" step="10" value="500">
@@ -113,6 +118,7 @@ export function renderTemplate(root: HTMLElement): void {
           <div class="inline">
             <button id="start" class="primary" type="button">开始生成</button>
             <button id="stop-generate" type="button" disabled>停止生成</button>
+            <button id="reset-settings" type="button" title="清除 localStorage 里保存的设置，并把所有选项恢复为默认值">恢复默认设置</button>
           </div>
         </div>
       </div>

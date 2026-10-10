@@ -110,14 +110,36 @@
 
 1. **浏览器直接打开** `https://你的-worker.workers.dev/`
    —— 应该返回 `{"ok":true,...}`。打不开说明 Worker 没部署成功。
-2. **看页面日志**（页面底部「日志」区）。走代理时错误信息会变成
-   `Edge TTS WebSocket 握手失败（HTTP 403）（已配置代理，请确认代理服务正常并且能补上 User-Agent 头）`
-   —— 说明请求确实走到代理了，但代理连上游被拒。
-3. **确认 Worker 里的代码是最新的**：连上游时只能带 `Upgrade: websocket`，
-   **不能**自己再带 `Connection: Upgrade`（带了会导致浏览器收到 WebSocket 1006），
-   而且必须用 `WebSocketPair` + 双向转发（不能只把上游 socket 返回给浏览器）。
-4. **确认线上 bundle 是新的**：在页面上按 F12，看 Network 里 JS 文件名。
-   推送代码后文件名会变（因为内容变了），如果没变就是还没部署成功。
+2. **看页面日志**（页面底部「日志」区），对照下表定位：
+
+   | 日志里的错误 | 含义 | 修法 |
+   | --- | --- | --- |
+   | `握手失败（HTTP 403）` + 「未配置代理」提示 | 页面在直连，浏览器的 User-Agent 被拒 | 配置 `VITE_EDGE_TTS_PROXY` |
+   | `握手失败（HTTP 403）` + 「已配置代理」提示 | 请求到了代理，但代理连上游被拒 | 代理没补 `User-Agent`，或缺 `Sec-MS-GEC` |
+   | `Edge TTS 返回了空音频文件` | **握手成功、但音频帧没转发过来** | 代理的二进制帧转发有问题（见第 3 条） |
+   | `连接被关闭（code=1006）` | 代理握手就被运行时拒绝 | 代理多发了 `Connection: Upgrade`（见第 3 条） |
+
+3. **确认 Worker 里的代码是最新的**，这份实现踩过三个坑，缺一个都会坏：
+
+   - 连上游时**只能**带 `Upgrade: websocket`，不能自己再发
+     `Connection: Upgrade`（发了会让浏览器看到 `1006`）；
+   - 必须用 `WebSocketPair` + 手动双向转发，**不能**只把上游 socket
+     直接返回给浏览器（那样一个字节都传不过去）；
+   - 转发二进制帧前要设 `binaryType = 'arraybuffer'`，否则拿到的是 `Blob`，
+     而 `WebSocket.send()` 不接受 `Blob` —— 音频帧会被静默丢掉，
+     客户端就报「返回了空音频文件」。
+
+   这三个坑都能用 [`tools/worker-local-check.mjs`](tools/worker-local-check.mjs)
+   在本地复现和验证（用 Cloudflare 官方运行时 Miniflare，不需要部署）：
+
+   ```bash
+   pnpm add -D miniflare
+   node tools/worker-local-check.mjs
+   # 期望输出：OK  Worker(Miniflare)  ...ms  turn.end  音频 XX 帧 XXXXX 字节
+   ```
+
+4. **确认线上 bundle 是新的**：F12 → Network，看 JS 文件名。
+   推送代码后文件名会变（内容变了），没变就是还没部署成功。
 5. **强刷页面**（Ctrl+F5 / Cmd+Shift+R），GitHub Pages 有缓存。
 
 ---
@@ -129,6 +151,7 @@
 - [本地开发](#本地开发)
 - [测试](#测试)
 - [上线到 GitHub Pages](#上线到-github-pages)
+- [设置保存与恢复默认](#设置保存与恢复默认)
 - [目录结构](#目录结构)
 - [已知限制](#已知限制)
 
@@ -385,14 +408,30 @@ Edge-TTS/
     ├── handshake-debug.mjs     # 打印服务端原始握手响应（证明 User-Agent 是必需的）
     ├── live-check.mjs          # 逐个测试请求头组合，找出被拒原因
     ├── proxy-check.mjs         # A/B 对照：带/不带 User-Agent 的握手结果
-    └── relay-check.mjs         # 最小可用的 Node 中转实现 + 端到端验证
+    ├── relay-check.mjs         # 最小可用的 Node 中转实现 + 端到端验证
+    └── worker-local-check.mjs  # 用 Miniflare 在本地验证 Worker 能不能合成
 ```
 
 > `build/` 目录只在本地生成对照样例时使用，已加入 `.gitignore`。
 >
-> `tools/` 里的网络排查脚本只在需要诊断时手动运行，不参与构建。
-> 其中 `relay-check.mjs` 需要 `pnpm add -D ws`（临时装一下即可）；
-> 它同时也是一个可以直接参考/改造的最小中转实现。
+> `tools/` 里的网络排查脚本只在需要诊断时手动运行，不参与构建：
+> `relay-check.mjs` 需要 `pnpm add -D ws`，`worker-local-check.mjs` 需要
+> `pnpm add -D miniflare`（都是临时装一下即可）。
+
+---
+
+## 设置保存与恢复默认
+
+所有设置（音色、语速/音调/音量、分段长度、自动播放、播放音量与速度、音色搜索等）
+都会自动保存在浏览器的 **localStorage** 里，键名 `edge-tts-web.settings.v1`，
+下次打开页面自动套用。
+
+设置面板底部有一个 **「恢复默认设置」** 按钮，会：
+
+- 清掉 localStorage 里保存的设置；
+- 把界面上所有选项恢复成默认值（回到和 Python 版首次启动一样的状态）。
+
+> 待朗读的文本**不会**被保存（避免占用 localStorage 配额），刷新后需要重新粘贴。
 
 ---
 

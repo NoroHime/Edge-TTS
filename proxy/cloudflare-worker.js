@@ -66,9 +66,37 @@ function corsHeaders(origin) {
 /**
  * 把两个 WebSocket 双向对接起来。
  *
- * 文本帧必须原样按文本转发（浏览器发字符串，上游也期望字符串）；
- * 二进制帧原样按二进制转发（上游回的是音频）。
+ * ⚠️ 二进制帧必须特别小心：
+ * Workers 的 `binaryType` 在不同 compat 日期下默认值不同
+ * （新版本默认 `"blob"`），而 `WebSocket.send()` **不接受 `Blob`**。
+ * 如果直接把收到的 Blob 转发出去，音频帧会被丢掉，
+ * 客户端就会报「Edge TTS 返回了空音频文件」。
+ *
+ * 所以这里显式把二进制数据统一成 ArrayBuffer 再发送。
  */
+function toTransferable(data) {
+  // ArrayBuffer / 各种 TypedArray 可以直接发。
+  if (data instanceof ArrayBuffer) return data
+  if (ArrayBuffer.isView(data)) return data
+
+  // Blob 需要异步读成 ArrayBuffer。
+  if (typeof Blob !== 'undefined' && data instanceof Blob) {
+    return data.arrayBuffer()
+  }
+
+  // 其它情况按字符串发（文本帧）。
+  return data
+}
+
+async function forward(target, data) {
+  if (target.readyState !== 1) return
+
+  const payload = toTransferable(data)
+
+  // Blob 会返回 Promise，需要 await；其它类型直接发。
+  target.send(payload instanceof Promise ? await payload : payload)
+}
+
 function relayPair(a, b) {
   let closed = false
 
@@ -84,26 +112,18 @@ function relayPair(a, b) {
     }
   }
 
-  a.addEventListener('message', (event) => {
-    try {
-      if (b.readyState === 1) b.send(event.data)
-    } catch {
-      shutdown()
-    }
-  })
+  const pipe = (from, to) => {
+    from.addEventListener('message', (event) => {
+      // 不 await：保持转发顺序，失败时直接断开。
+      forward(to, event.data).catch(shutdown)
+    })
 
-  b.addEventListener('message', (event) => {
-    try {
-      if (a.readyState === 1) a.send(event.data)
-    } catch {
-      shutdown()
-    }
-  })
+    from.addEventListener('close', shutdown)
+    from.addEventListener('error', shutdown)
+  }
 
-  a.addEventListener('close', shutdown)
-  b.addEventListener('close', shutdown)
-  a.addEventListener('error', shutdown)
-  b.addEventListener('error', shutdown)
+  pipe(a, b)
+  pipe(b, a)
 }
 
 export default {
@@ -201,6 +221,10 @@ export default {
     const pair = new WebSocketPair()
     const client = pair[0]
     const server = pair[1]
+
+    // 显式要求 ArrayBuffer，避免拿到 Blob 后转发时把音频帧丢掉。
+    server.binaryType = 'arraybuffer'
+    upstreamResponse.webSocket.binaryType = 'arraybuffer'
 
     server.accept()
     upstreamResponse.webSocket.accept()

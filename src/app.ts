@@ -16,7 +16,12 @@
  */
 
 import { mergeBlobsToWav } from './audio.ts'
-import { DEFAULT_PLAYBACK_RATE } from './constants.ts'
+import {
+  DEFAULT_MAX_CHARS,
+  DEFAULT_MIN_CHARS,
+  DEFAULT_PAUSE_MS,
+  DEFAULT_PLAYBACK_RATE,
+} from './constants.ts'
 import { createBackend, type EdgeBackend, type SpeechOptions } from './edgeTts.ts'
 import { generateSegments, type GeneratedSegment } from './generator.ts'
 import { PlaybackController, type PlaybackState } from './playback.ts'
@@ -61,6 +66,7 @@ interface PersistedSettings {
   playRate?: number
   playVolume?: number
   voiceSearch?: string
+  instruction?: string
 }
 
 const STORAGE_KEY = 'edge-tts-web.settings.v1'
@@ -204,6 +210,9 @@ export class NovelTtsApp {
     dom.autoPlay.addEventListener('change', () => this.saveSettings())
     dom.autoExport.addEventListener('change', () => this.saveSettings())
 
+    dom.reset.addEventListener('click', () => this.resetSettings())
+    dom.instruction.addEventListener('input', () => this.saveSettings())
+
     dom.segmentList.addEventListener('click', (event) => {
       const target = (event.target as HTMLElement).closest<HTMLElement>(
         '.segment-item',
@@ -299,6 +308,7 @@ export class NovelTtsApp {
       playRate: Number(dom.playRate.value) / 100,
       playVolume: Number(dom.playVolume.value),
       voiceSearch: dom.voiceFilter.value,
+      instruction: dom.instruction.value,
     }
 
     try {
@@ -336,6 +346,10 @@ export class NovelTtsApp {
       dom.voiceFilter.value = settings.voiceSearch
     }
 
+    if (settings.instruction !== undefined) {
+      dom.instruction.value = settings.instruction
+    }
+
     const playRate = settings.playRate ?? DEFAULT_PLAYBACK_RATE
     dom.playRate.value = String(Math.round(playRate * 100))
     dom.playRateValue.textContent = `${playRate.toFixed(2)}x`
@@ -349,6 +363,54 @@ export class NovelTtsApp {
     dom.minChars.max = dom.maxChars.value
 
     this.pendingVoice = settings.voice ?? DEFAULT_VOICE
+  }
+
+  /**
+   * 恢复默认设置。
+   *
+   * 对应 Python 版里每次启动都是默认值的状态：
+   * 清掉 localStorage 里保存的设置，再把界面控件重置回默认值。
+   */
+  private resetSettings(): void {
+    const { dom } = this
+
+    try {
+      localStorage.removeItem(STORAGE_KEY)
+    } catch {
+      /* 隐私模式下可能失败，忽略 */
+    }
+
+    // 分段与停顿。
+    dom.maxChars.value = String(DEFAULT_MAX_CHARS)
+    dom.minChars.value = String(DEFAULT_MIN_CHARS)
+    dom.minChars.max = String(DEFAULT_MAX_CHARS)
+    dom.pause.value = String(DEFAULT_PAUSE_MS)
+
+    // 语音参数。
+    dom.rate.value = '+0%'
+    dom.pitch.value = '+0Hz'
+    dom.volume.value = '+0%'
+
+    // 自定义指令与音色搜索。
+    dom.instruction.value = ''
+    dom.voiceFilter.value = ''
+    this.rebuildVoiceOptions()
+
+    // 开关。
+    dom.autoPlay.checked = true
+    dom.autoExport.checked = false
+
+    // 播放参数（语速只影响播放，不改动已生成的音频）。
+    dom.playRate.value = String(Math.round(DEFAULT_PLAYBACK_RATE * 100))
+    dom.playRateValue.textContent = `${DEFAULT_PLAYBACK_RATE.toFixed(2)}x`
+    this.player.setRate(DEFAULT_PLAYBACK_RATE)
+
+    dom.playVolume.value = '100'
+    dom.playVolumeValue.textContent = '100%'
+    this.player.setVolume(1)
+
+    this.setStatus('已恢复默认设置。')
+    this.appendLog('已恢复默认设置（localStorage 中的设置已清除）。')
   }
 
   /* ---------------------------------------------------------------- */
@@ -505,6 +567,8 @@ export class NovelTtsApp {
       this.dom.pause,
       this.dom.autoPlay,
       this.dom.autoExport,
+      this.dom.instruction,
+      this.dom.reset,
       this.dom.openTxt,
       this.dom.clearText,
       this.dom.text,
@@ -1223,6 +1287,8 @@ function collectDom() {
     pause: el<HTMLInputElement>('pause'),
     autoPlay: el<HTMLInputElement>('auto-play'),
     autoExport: el<HTMLInputElement>('auto-export'),
+    reset: el<HTMLButtonElement>('reset-settings'),
+    instruction: el<HTMLInputElement>('instruction'),
     start: el<HTMLButtonElement>('start'),
     stopGenerate: el<HTMLButtonElement>('stop-generate'),
 
