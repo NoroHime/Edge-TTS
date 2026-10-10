@@ -1,0 +1,21 @@
+{
+  "name": "edge-tts-web",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "novel-tts 的纯前端 TypeScript 版本（Edge TTS 在线朗读）",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "test": "node tests/protocol.test.ts && node tests/parity.test.ts build/python-reference.json",
+    "test:protocol": "node tests/protocol.test.ts",
+    "test:parity": "node tests/parity.test.ts build/python-reference.json",
+    "fixtures": "python tools/gen_reference.py build/python-reference.json"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3",
+    "vite": "^5.4.10"
+  }
+}
