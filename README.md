@@ -1,10 +1,9 @@
 # novel-tts Web · Edge TTS 在线朗读
 
 把 Python 桌面版 **novel-tts**（`GUI_QWENv6.pyw` + `tts_backends.py`）里的
-**Edge TTS 引擎**移植成了纯前端 TypeScript 应用：
+**Edge TTS 引擎**移植成了 TypeScript 应用：
 
 - 不需要安装 Python、`edge-tts`、`soundfile`，**也不需要 FFmpeg**；
-- 浏览器直接通过 WebSocket 调用微软 Edge 的在线语音合成接口；
 - 生成与播放并行：第一段生成完就开始播，后续片段边生成边播；
 - 播放到最后一段就停止，**不会回到第一段循环**；
 - 全部生成完成后可以把所有片段拼成一个 WAV 下载。
@@ -15,8 +14,89 @@
 
 ---
 
+## ⚠️ 必读：为什么 Chrome / 手机浏览器会「连续尝试 3 次仍未成功」
+
+如果你看到：
+
+```
+状态：生成失败：Error: Edge TTS 请求失败：连续尝试 3 次仍未成功。
+最后错误：Error: Edge TTS WebSocket 握手失败（HTTP 403）
+```
+
+**这不是网络问题，也不是代理开关的问题，更不是必须用 Edge。**
+原因是微软的合成服务在 **WebSocket 握手阶段强制要求 `User-Agent` 请求头**，
+而浏览器的 WebSocket API **不允许网页设置 `User-Agent`**
+（它属于 HTML 规范里的 forbidden header name，浏览器直接忽略页面的设置）。
+
+实测证据（同一台机器、同一个 IP、同一个令牌，只改请求头）：
+
+| 握手请求头 | 服务端响应 |
+| --- | --- |
+| 带 `User-Agent` | `HTTP/1.1 101 Switching Protocols` ✅ |
+| `User-Agent` + `Origin` | `HTTP/1.1 101 Switching Protocols` ✅ |
+| **不带 `User-Agent`** | **`HTTP/1.1 403 Forbidden`** ❌ |
+| 只带 `Origin` / 只带 `Cookie` | `403 Forbidden` ❌ |
+
+所以：
+
+- **桌面 Edge 能用** —— Edge 自己在握手时带了正确的 `User-Agent`；
+- **Chrome / Firefox / Safari / 手机浏览器全部失败** —— 它们带的 `User-Agent`
+  是浏览器自己的，微软不认；
+- 换不换代理都一样 —— 因为缺的是请求头，不是网络出口。
+
+### 解决办法：加一个中转（代理）
+
+因为 GitHub Pages 只能托管静态文件、无法替浏览器补请求头，
+所以需要一个能补 `User-Agent` 的服务端中转。本仓库已经提供现成的
+[`proxy/cloudflare-worker.js`](proxy/cloudflare-worker.js)（Cloudflare Workers，免费）：
+
+1. 注册 <https://dash.cloudflare.com>（免费账号，不用绑卡）
+2. 左侧 **Workers & Pages** → **Create** → **Worker**，随便起个名字（例如 `edge-tts-proxy`）
+3. 把 [`proxy/cloudflare-worker.js`](proxy/cloudflare-worker.js) 的全部内容粘进去，**Deploy**
+4. 记下地址，形如 `https://edge-tts-proxy.你的子域.workers.dev`
+   （先在浏览器打开它，应该看到 `{"ok":true,...}` 的 JSON）
+5. 在项目根目录建一个 `.env.local`：
+
+   ```
+   VITE_EDGE_TTS_PROXY=wss://edge-tts-proxy.你的子域.workers.dev
+   ```
+
+6. 重新构建并推送：
+
+   ```bash
+   pnpm build && git add -A && git commit -m "启用 Edge TTS 中转" && git push
+   ```
+
+   如果用 GitHub Actions 自动发布，则把这个环境变量加到
+   **Settings → Secrets and variables → Actions → Variables** 里，
+   变量名 `VITE_EDGE_TTS_PROXY`，并在
+   [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml) 的
+   `pnpm run build` 那一步加上 `env: VITE_EDGE_TTS_PROXY: ${{ vars.VITE_EDGE_TTS_PROXY }}`。
+
+配好之后 Chrome / Firefox / 手机浏览器都能正常合成。
+
+> 中转只做「补请求头 + 转发字节流」，音频是边收边转发的，不会在服务端落盘。
+> 建议在 Worker 里设置 `ALLOWED_ORIGINS` 变量（你的站点来源），
+> 免得被别人白用，例如：`https://norohime.github.io`。
+>
+> **替代方案：**如果你不想用 Cloudflare，也可以自己在任何能跑 Node/Python
+> 的地方跑一个中转（核心逻辑就是「收到连接 → 带上 `User-Agent` 连上游 → 双向转发」）。
+> [`tools/relay-check.mjs`](tools/relay-check.mjs) 就是一个最小可用的 Node 实现，
+> 可以直接拿来当参考或改成本地服务。
+
+### 一句话总结
+
+| 场景 | 能否合成 |
+| --- | --- |
+| 页面直连（未配置 `VITE_EDGE_TTS_PROXY`），用桌面 Edge 打开 | ✅ |
+| 页面直连，用 Chrome / 手机浏览器打开 | ❌ 必然 403 |
+| 配置了中转代理 | ✅ 任意浏览器 |
+
+---
+
 ## 目录
 
+- [必读：为什么 Chrome / 手机浏览器失败](#️-必读为什么-chrome--手机浏览器会连续尝试-3-次仍未成功)
 - [与 Python 版的对应关系](#与-python-版的对应关系)
 - [本地开发](#本地开发)
 - [测试](#测试)
@@ -269,30 +349,47 @@ Edge-TTS/
 ├── tests/
 │   ├── protocol.test.ts        # Edge TTS 协议自检（不联网）
 │   └── parity.test.ts          # 与 Python 原版对照
+├── proxy/
+│   └── cloudflare-worker.js    # WebSocket 中转（补 User-Agent），部署到 Cloudflare Workers
 └── tools/
-    └── gen_reference.py        # 生成对照样例（复制自原版 Python 函数）
+    ├── gen_reference.py        # 生成对照样例（复制自原版 Python 函数）
+    ├── handshake-debug.mjs     # 打印服务端原始握手响应（证明 User-Agent 是必需的）
+    ├── live-check.mjs          # 逐个测试请求头组合，找出被拒原因
+    ├── proxy-check.mjs         # A/B 对照：带/不带 User-Agent 的握手结果
+    └── relay-check.mjs         # 最小可用的 Node 中转实现 + 端到端验证
 ```
 
 > `build/` 目录只在本地生成对照样例时使用，已加入 `.gitignore`。
+>
+> `tools/` 里的网络排查脚本只在需要诊断时手动运行，不参与构建。
+> 其中 `relay-check.mjs` 需要 `pnpm add -D ws`（临时装一下即可）；
+> 它同时也是一个可以直接参考/改造的最小中转实现。
 
 ---
 
 ## 已知限制
 
 1. **必须联网**，且依赖微软的非公开接口。接口变更会导致合成失败（页面会在日志里显示原因）。
-2. **语速 / 音调 / 音量使用 SSML 韵律参数**，与 Python 版“用播放器变速”不同。
+2. **非 Edge 浏览器必须配置中转代理**（见开头「必读」一节），
+   因为微软在握手阶段强制要求 `User-Agent`，而浏览器不允许网页设置该头。
+3. **`Sec-MS-GEC-Version` 必须跟随上游更新**。服务端会校验这个 Chromium 版本号，
+   版本太旧会直接 403。当前值在 [`src/constants.ts`](src/constants.ts)
+   （`CHROMIUM_FULL_VERSION`），与 `edge-tts` 7.2.8 一致；上游更新时应同步修改。
+4. **语速 / 音调 / 音量使用 SSML 韵律参数**，与 Python 版“用播放器变速”不同。
    播放速度（`0.50x`–`2.00x`）仍然是播放器层面的，不改动已生成的音频。
-3. **音色列表接口只有 HTTP 版本**。GitHub Pages 是 HTTPS，浏览器会拦截混合内容，
+5. **音色列表接口只有 HTTP 版本**。GitHub Pages 是 HTTPS，浏览器会拦截混合内容，
    所以点击「获取全部」可能失败，此时会继续使用内置的 6 个中文音色
    （与 Python 版完全一致）。
-4. **FFmpeg 已不再需要**：浏览器直接拿到 MP3 播放，导出时才重编码为 WAV。
-5. **长文本会分批请求**：单次 SSML 正文上限 4096 字节，超出会自动拆成多次请求再拼接。
+6. **FFmpeg 已不再需要**：浏览器直接拿到 MP3 播放，导出时才重编码为 WAV。
+7. **长文本会分批请求**：单次 SSML 正文上限 4096 字节，超出会自动拆成多次请求再拼接。
    （上游 `edge-tts` 在“整段没有换行和空格”的极端情况下会发出一个超过上限的请求，
    本移植版刻意修正为严格不超过上限，`tests/parity.test.ts` 里对此有说明。）
-6. **片段音频保存在内存里**。非常长的文本（例如几十万字）会占用较多内存，
+8. **片段音频保存在内存里**。非常长的文本（例如几十万字）会占用较多内存，
    建议一次处理一章。
-7. 原版的 **Qwen3-TTS** 和 **MeloTTS** 引擎依赖本地模型和 CUDA，无法在浏览器里运行，
+9. 原版的 **Qwen3-TTS** 和 **MeloTTS** 引擎依赖本地模型和 CUDA，无法在浏览器里运行，
    因此本版本只保留 Edge TTS 引擎。
+10. **中转代理有被滥用的风险**。Worker 是公开地址，建议配置 `ALLOWED_ORIGINS`
+    限制来源；如果流量很大，Cloudflare 免费额度（每天 10 万次请求）可能不够。
 
 ---
 

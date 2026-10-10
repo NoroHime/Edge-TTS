@@ -24,6 +24,7 @@ import {
   OUTPUT_FORMAT,
   SEC_MS_GEC_VERSION,
   TRUSTED_CLIENT_TOKEN,
+  USING_PROXY,
   WSS_URL,
 } from './constants.ts'
 
@@ -378,8 +379,14 @@ function synthesizePiece(options: PieceOptions): Promise<Blob> {
   const { text, voice, speech, timeoutSeconds, signal } = options
 
   return getSecMsGec().then((secMsGec) => {
+    // 直连时 WSS_URL 已经带 ?TrustedClientToken=...；
+    // 走代理时 WSS_URL 是代理地址（不带查询串），也要把查询参数带过去，
+    // 这样代理才能原样转发给上游。
+    const separator = WSS_URL.includes('?') ? '&' : '?'
+
     const url =
-      `${WSS_URL}&ConnectionId=${connectId()}` +
+      `${WSS_URL}${separator}TrustedClientToken=${TRUSTED_CLIENT_TOKEN}` +
+      `&ConnectionId=${connectId()}` +
       `&Sec-MS-GEC=${secMsGec}` +
       `&Sec-MS-GEC-Version=${SEC_MS_GEC_VERSION}`
 
@@ -517,11 +524,16 @@ function synthesizePiece(options: PieceOptions): Promise<Blob> {
       }
 
       ws.onerror = () => {
-        fail(
-          new Error(
-            'Edge TTS WebSocket 连接失败（可能是网络、代理或接口被限制）。',
-          ),
-        )
+        // 绝大多数情况下 403 都是这个原因：微软在握手阶段强制要求
+        // User-Agent，而浏览器的 WebSocket API 不允许页面设置该头。
+        const hint = USING_PROXY
+          ? '（已配置代理，请确认代理服务正常并且能补上 User-Agent 头）'
+          : '：浏览器不允许网页在 WebSocket 握手里设置 User-Agent，' +
+            '而微软的服务强制要求它，所以除了桌面 Edge 之外都会 403。' +
+            '解决办法是配置一个服务端中转（见 README 的「为什么必须用代理」），' +
+            '并设置 VITE_EDGE_TTS_PROXY。'
+
+        fail(new Error(`Edge TTS WebSocket 握手失败（HTTP 403）${hint}`))
       }
 
       ws.onclose = (event: CloseEvent) => {

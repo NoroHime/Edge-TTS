@@ -3,5 +3,7 @@ dist/
 build/
 __pycache__/
 *.local
+.env
+.env.local
 .DS_Store
 .vite/

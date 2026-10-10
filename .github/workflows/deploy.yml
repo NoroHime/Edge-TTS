@@ -34,6 +34,11 @@ jobs:
 
       - name: Typecheck and build
         run: pnpm run build
+        env:
+          # 中转地址（可选）：在仓库 Settings → Secrets and variables →
+          # Actions → Variables 里加一个 VITE_EDGE_TTS_PROXY 变量即可。
+          # 不配置的话，只有桌面 Edge 能正常合成（原因见 README 开头）。
+          VITE_EDGE_TTS_PROXY: ${{ vars.VITE_EDGE_TTS_PROXY }}
 
       - uses: actions/configure-pages@v5
 
