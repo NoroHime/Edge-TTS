@@ -2,32 +2,30 @@
  * 界面模板。
  *
  * 对应 Python 版 MainWindow._build_ui()：
- *   TTS 设置 / 待朗读文本 / 生成进度 / 片段 / 播放 / 日志
+ *   设置 / 文本 / 进度 / 片段 / 播放 / 日志
  */
 
 export function renderTemplate(root: HTMLElement): void {
   root.innerHTML = `
     <header class="app-header">
-      <h1>novel-tts Web · Edge TTS 在线朗读</h1>
-      <span class="tag">纯前端 · TypeScript</span>
-      <span class="tag">无需安装 · 无需 FFmpeg</span>
+      <h1>novel-tts Web</h1>
+      <span class="tag">Edge TTS</span>
+      <p class="subtitle">小说分段朗读：边生成边播放，可导出完整 WAV</p>
       <span class="links">
-        <a href="https://github.com/norohime" target="_blank" rel="noopener noreferrer">GitHub</a>
+        <a href="https://github.com/NoroHime/Edge-TTS" target="_blank" rel="noopener noreferrer">GitHub</a>
       </span>
     </header>
 
     <div class="notice">
-      <strong>说明：</strong>
-      本页面使用 Edge 浏览器内置的在线语音合成接口（Edge TTS，微软非公开接口）。
-      音频由微软服务器生成，因此需要联网；接口随时可能变更或被限制，
-      请勿用于商业或大规模自动化用途。浏览器端已内置对应实现，不需要安装 Python、edge-tts 或 FFmpeg。
+      合成由微软 Edge 在线接口完成，需要联网；这是非公开接口，随时可能变更。
+      首次使用建议点右侧「获取全部」载入完整音色列表。
     </div>
 
     <section class="layout-top">
       <div class="panel">
-        <h2>TTS 设置</h2>
+        <h2>设置</h2>
         <div class="form-grid">
-          <label for="engine">TTS 引擎</label>
+          <label for="engine">引擎</label>
           <select id="engine">
             <option value="edge" selected>Edge TTS（在线）</option>
           </select>
@@ -35,12 +33,12 @@ export function renderTemplate(root: HTMLElement): void {
           <label for="voice-filter">音色</label>
           <div class="field-row">
             <select id="voice"></select>
-            <button id="fetch-voices" class="icon" type="button" title="从微软接口拉取完整音色列表（页面在 HTTPS 下可能被浏览器拦截）">获取全部</button>
+            <button id="fetch-voices" class="icon" type="button" title="从微软接口拉取完整音色列表（HTTPS 页面请求 HTTP 接口时可能被浏览器拦截）">获取全部</button>
           </div>
 
           <label for="voice-search">搜索音色</label>
           <div class="field-row">
-            <input id="voice-search" type="search" placeholder="例如 zh-CN / Xiaoxiao / 晓晓（留空显示全部）" autocomplete="off">
+            <input id="voice-search" type="search" placeholder="如 zh-CN、Xiaoxiao、晓晓" autocomplete="off" value="zh">
           </div>
 
           <label for="rate">语速</label>
@@ -103,22 +101,22 @@ export function renderTemplate(root: HTMLElement): void {
           </div>
 
           <span></span>
-          <label class="inline" for="auto-play">
+          <label class="inline nowrap" for="auto-play">
             <input id="auto-play" type="checkbox" checked>
-            <span>生成第一段后自动开始播放</span>
+            <span>生成完第一段自动播放</span>
           </label>
 
           <span></span>
-          <label class="inline" for="auto-export">
+          <label class="inline nowrap" for="auto-export">
             <input id="auto-export" type="checkbox">
-            <span>全部生成完成后自动拼合（导出 WAV）</span>
+            <span>全部完成后自动导出 WAV</span>
           </label>
 
           <span></span>
           <div class="inline">
             <button id="start" class="primary" type="button">开始生成</button>
             <button id="stop-generate" type="button" disabled>停止生成</button>
-            <button id="reset-settings" type="button" title="清除 localStorage 里保存的设置，并把所有选项恢复为默认值">恢复默认设置</button>
+            <button id="reset-settings" type="button" title="清除 localStorage 里保存的设置，并恢复所有默认值">恢复默认</button>
           </div>
         </div>
       </div>
@@ -126,7 +124,7 @@ export function renderTemplate(root: HTMLElement): void {
       <div class="panel">
         <h2>待朗读文本</h2>
         <div class="textarea-wrap">
-          <textarea id="source-text" placeholder="把小说片段粘贴到这里。&#10;&#10;文本会按句号、问号、感叹号等标点自动分段，并根据最小段落长度合并短片段。"></textarea>
+          <textarea id="source-text" placeholder="把小说粘贴到这里。按句号、问号、感叹号等标点自动分段，过短的片段会与相邻内容合并。"></textarea>
           <div class="text-toolbar">
             <button id="open-txt" type="button">打开 TXT</button>
             <button id="clear-text" type="button">清空</button>
@@ -141,7 +139,7 @@ export function renderTemplate(root: HTMLElement): void {
       <div class="progress-track" id="progress-track">
         <div class="progress-bar" id="progress-bar"></div>
       </div>
-      <span class="status-line" id="status">状态：就绪。请粘贴文本后点击“开始生成”。</span>
+      <span class="status-line" id="status">状态：就绪。粘贴文本后点「开始生成」。</span>
     </div>
 
     <section class="layout-bottom">
@@ -151,7 +149,7 @@ export function renderTemplate(root: HTMLElement): void {
       </div>
 
       <div class="panel">
-        <h2>播放 <span class="hint">自动连续播放，最后一段结束后停止</span></h2>
+        <h2>播放 <span class="hint">自动接续，播完最后一段停止</span></h2>
 
         <div class="playback-controls">
           <button id="play-all" type="button">播放全部</button>
@@ -193,8 +191,8 @@ export function renderTemplate(root: HTMLElement): void {
     </section>
 
     <footer class="app-footer">
-      novel-tts Web · Edge TTS &nbsp;|&nbsp; 源自 Python 版 <code>GUI_QWENv6.pyw</code> +
-      <code>tts_backends.py</code> 的 TypeScript 重写
+      novel-tts Web · Edge TTS &nbsp;|&nbsp; 移植自 Python 版
+      <code>GUI_QWENv6.pyw</code>
     </footer>
   `
 }

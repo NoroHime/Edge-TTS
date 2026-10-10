@@ -61,7 +61,7 @@ body {
 }
 
 #app {
-  max-width: 1320px;
+  max-width: 1400px;
   margin: 0 auto;
   padding: 16px 18px 40px;
 }
@@ -210,7 +210,8 @@ label {
 
 .layout-top {
   display: grid;
-  grid-template-columns: minmax(340px, 400px) 1fr;
+  /* 设置面板加宽：否则「全部完成后自动导出 WAV」这种长标签会被挤出去 */
+  grid-template-columns: minmax(430px, 490px) 1fr;
   gap: 14px;
   align-items: stretch;
 }
@@ -274,6 +275,20 @@ label {
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+/* 复选框后面的一整句说明不要折行 */
+.inline.nowrap,
+.inline.nowrap span {
+  white-space: nowrap;
+}
+
+/* 页头副标题：比 h1 小、比 tag 显眼，占满一行 */
+.app-header .subtitle {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 12.5px;
 }
 
 .sep {

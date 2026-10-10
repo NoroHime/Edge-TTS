@@ -71,6 +71,62 @@ interface PersistedSettings {
 
 const STORAGE_KEY = 'edge-tts-web.settings.v1'
 
+/** 完整音色列表的缓存键（拿到过 322 个之后就不用每次重新拉了）。 */
+const VOICE_CACHE_KEY = 'edge-tts-web.voices.v1'
+
+/** 音色搜索框的默认值：首次打开只显示中文音色。 */
+const DEFAULT_VOICE_FILTER = 'zh'
+
+interface CachedVoices {
+  fetchedAt: number
+  voices: VoiceOption[]
+}
+
+/** 读取缓存的完整音色列表；过期或损坏时返回 null。 */
+function loadVoiceCache(maxAgeMs = 7 * 24 * 60 * 60 * 1000): VoiceOption[] | null {
+  try {
+    const raw = localStorage.getItem(VOICE_CACHE_KEY)
+
+    if (!raw) {
+      return null
+    }
+
+    const parsed = JSON.parse(raw) as CachedVoices
+
+    if (
+      typeof parsed?.fetchedAt !== 'number' ||
+      !Array.isArray(parsed.voices) ||
+      parsed.voices.length === 0 ||
+      Date.now() - parsed.fetchedAt > maxAgeMs
+    ) {
+      localStorage.removeItem(VOICE_CACHE_KEY)
+      return null
+    }
+
+    // 简单校验每条记录的字段，避免旧版本数据把界面搞崩。
+    const voices = parsed.voices.filter(
+      (voice) =>
+        typeof voice?.id === 'string' &&
+        voice.id.length > 0 &&
+        typeof voice.name === 'string',
+    )
+
+    return voices.length > 0 ? voices : null
+  } catch {
+    return null
+  }
+}
+
+/** 保存完整音色列表。 */
+function saveVoiceCache(voices: VoiceOption[]): void {
+  try {
+    const payload: CachedVoices = { fetchedAt: Date.now(), voices }
+    localStorage.setItem(VOICE_CACHE_KEY, JSON.stringify(payload))
+  } catch {
+    /* 配额满或隐私模式，忽略 */
+  }
+}
+
 /** 取得元素并断言存在，避免到处写非空判断。 */
 function el<T extends HTMLElement = HTMLElement>(id: string): T {
   const found = document.getElementById(id)
@@ -149,6 +205,14 @@ export class NovelTtsApp {
     const storedSettings = this.loadSettings()
 
     this.applySettings(storedSettings)
+
+    // 如果之前拉取过完整音色列表，直接用缓存，不必重新请求。
+    const cachedVoices = loadVoiceCache()
+
+    if (cachedVoices) {
+      this.allVoices = cachedVoices
+      this.voices = cachedVoices
+    }
 
     // 「生成第一段后自动开始播放」默认开启：只有在用户**显式**关过
     // （localStorage 里有 false）时才保持关闭。
@@ -352,8 +416,12 @@ export class NovelTtsApp {
       dom.autoExport.checked = settings.autoExport
     }
 
-    if (settings.voiceSearch) {
+    if (settings.voiceSearch !== undefined) {
+      // 搜索词是用户自己设的（包括「故意清空」），照用。
       dom.voiceFilter.value = settings.voiceSearch
+    } else {
+      // 首次使用：默认只显示中文音色，避免 300+ 条英文音色淹没列表。
+      dom.voiceFilter.value = DEFAULT_VOICE_FILTER
     }
 
     if (settings.instruction !== undefined) {
@@ -386,9 +454,14 @@ export class NovelTtsApp {
 
     try {
       localStorage.removeItem(STORAGE_KEY)
+      localStorage.removeItem(VOICE_CACHE_KEY)
     } catch {
       /* 隐私模式下可能失败，忽略 */
     }
+
+    // 音色：丢掉缓存的完整列表，回到内置的 6 个中文音色。
+    this.allVoices = EDGE_VOICE_OPTIONS
+    this.voices = EDGE_VOICE_OPTIONS
 
     // 分段与停顿。
     dom.maxChars.value = String(DEFAULT_MAX_CHARS)
@@ -401,9 +474,10 @@ export class NovelTtsApp {
     dom.pitch.value = '+0Hz'
     dom.volume.value = '+0%'
 
-    // 自定义指令与音色搜索。
+    // 自定义指令与音色搜索（搜索框回到默认的 zh）。
     dom.instruction.value = ''
-    dom.voiceFilter.value = ''
+    dom.voiceFilter.value = DEFAULT_VOICE_FILTER
+    this.pendingVoice = DEFAULT_VOICE
     this.rebuildVoiceOptions()
 
     // 开关。
@@ -487,8 +561,11 @@ export class NovelTtsApp {
       this.allVoices = voices
       this.voices = voices
 
+      // 缓存到 localStorage：下次打开直接可用（有效期 7 天）。
+      saveVoiceCache(voices)
+
       this.rebuildVoiceOptions()
-      this.appendLog(`已获取 ${voices.length} 个音色。`)
+      this.appendLog(`已获取 ${voices.length} 个音色（已缓存到本地）。`)
       this.setStatus(`已获取 ${voices.length} 个音色。`)
     } catch (error) {
       this.appendLog(
