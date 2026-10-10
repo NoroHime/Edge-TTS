@@ -190,18 +190,53 @@ OK - 30 checks passed (text splitting / byte splitting / Sec-MS-GEC)
 
 需要 Node.js 18+（建议 22+，测试脚本用到了原生的 TypeScript 类型擦除）和 pnpm。
 
+### 推荐：一条命令同时起中转 + 开发服务器
+
 ```bash
-cd Edge-TTS
+pnpm dev:proxy
+```
 
-pnpm install
+它会自动装 `ws`、写好 `.env.local`、启动 **Node 中转**（`ws://127.0.0.1:8787`）
+和 **Vite 开发服务器**，然后打开：
 
-pnpm dev        # 开发服务器，默认 http://localhost:5173/Edge-TTS/
+```
+http://localhost:5173/Edge-TTS/
+```
+
+本地是 `http://`，所以 `ws://127.0.0.1:8787` 不会被当成混合内容 ——
+**Chrome / Firefox / 手机浏览器都能正常合成**。
+
+### 手动分开跑
+
+```bash
+pnpm proxy    # 终端 1：Node 中转，监听 ws://127.0.0.1:8787
+pnpm dev      # 终端 2：开发服务器
+```
+
+`.env.local` 里写：
+
+```
+VITE_EDGE_TTS_PROXY=ws://127.0.0.1:8787
+```
+
+### 只跑前端（不配中转）
+
+```bash
+pnpm dev      # 直连微软接口 —— 只有桌面 Edge 能用
+```
+
+### 构建
+
+```bash
 pnpm build      # 类型检查 + 打包到 dist/
 pnpm preview    # 预览打包结果，默认 http://localhost:4173/Edge-TTS/
 ```
 
 > 注意：`vite.config.ts` 里的 `base` 必须等于**仓库名**（当前是 `Edge-TTS`）。
 > 如果你把仓库改成别的名字，这一行也要跟着改，否则 GitHub Pages 上会 404。
+>
+> 另外 Vite 会**优先读取 `.env.local`**，它会覆盖环境变量。
+> 线上部署统一走 GitHub Actions 的 Variables，本地开发才用 `.env.local`。
 
 ---
 
@@ -401,8 +436,9 @@ Edge-TTS/
 │   ├── protocol.test.ts        # Edge TTS 协议自检（不联网）
 │   └── parity.test.ts          # 与 Python 原版对照
 ├── proxy/
-│   ├── cloudflare-worker.js    # WebSocket 中转（推荐）：部署到 Cloudflare Workers
-│   └── node-proxy.mjs          # WebSocket 中转（备选）：本机 / 服务器上跑 Node
+│   ├── cloudflare-worker.js    # WebSocket 中转：部署到 Cloudflare Workers
+│   ├── node-proxy.mjs          # WebSocket 中转：本机 / 服务器上跑 Node（已验证可用）
+│   └── dev.mjs                 # 一键本地开发（中转 + dev server）
 └── tools/
     ├── gen_reference.py        # 生成对照样例（复制自原版 Python 函数）
     ├── handshake-debug.mjs     # 打印服务端原始握手响应（证明 User-Agent 是必需的）
