@@ -2,7 +2,7 @@
  * Edge TTS WebSocket 中转（Cloudflare Worker）。
  *
  * ────────────────────────────────────────────────────────────────────
- * 为什么必须要这个代理？
+ * 为什么必须要这个中转？
  * ────────────────────────────────────────────────────────────────────
  * 微软的在线合成服务在 **WebSocket 握手阶段强制要求 User-Agent 头**：
  *
@@ -10,36 +10,40 @@
  *     不带 User-Agent  → HTTP/1.1 403 Forbidden
  *
  * 而浏览器的 WebSocket API 不允许页面设置 User-Agent
- * （User-Agent 属于 HTML 规范的 forbidden header name）。
- * 所以：
+ * （User-Agent 属于 HTML 规范的 forbidden header name）。所以：
  *
  *   · 桌面 Edge 能用 —— Edge 自己在握手时带了正确的 User-Agent；
  *   · Chrome / Firefox / Safari / 手机浏览器 / 任何纯 JS 客户端 → 403。
  *
  * GitHub Pages 只能托管静态文件，没法替浏览器补这个头，
- * 因此需要一个服务端中转。这个 Worker 就是干这件事的：
- * 浏览器连 Worker，Worker 补上 User-Agent 后再连微软。
- * 音频繁还是流式的（边收边转发），不会把整段音频缓存在服务端。
+ * 因此需要一个服务端中转。这个 Worker 就是干这件事的。
  *
  * ────────────────────────────────────────────────────────────────────
  * 部署（免费）
  * ────────────────────────────────────────────────────────────────────
- *   1. 注册 https://dash.cloudflare.com （免费账号）
+ *   1. 注册 https://dash.cloudflare.com （免费账号，不用绑卡）
  *   2. 左侧 Workers & Pages → Create → Worker → 随便起个名字
  *   3. 把本文件的全部内容粘进去，Deploy
  *   4. 记下地址，形如 https://edge-tts-proxy.你的子域.workers.dev
- *   5. 在项目根目录建 .env.local，写入：
+ *      （先在浏览器打开它，应看到 {"ok":true,...} 的 JSON）
+ *   5. 项目根目录建 .env.local，写入：
  *
  *          VITE_EDGE_TTS_PROXY=wss://edge-tts-proxy.你的子域.workers.dev
  *
- *   6. 重新 build 并推送，GitHub Pages 就会走这个代理
+ *   6. 重新 build 并推送，GitHub Pages 就会走这个中转
  *
- * 想限制只让自己的站点使用，在 Worker 的 Settings → Variables 里加一个
- * 变量 ALLOWED_ORIGINS，值为你的站点来源，多个用英文逗号分隔，例如：
+ * 想限制只让自己的站点使用，在 Worker 的 Settings → Variables and
+ * Secrets 里加一个变量 ALLOWED_ORIGINS，值为你的站点来源，多个用逗号分隔：
  *
  *          ALLOWED_ORIGINS = https://norohime.github.io,http://localhost:5173
  *
- * 留空表示不限制（不建议，会被别人白用）。
+ * ────────────────────────────────────────────────────────────────────
+ * 实现要点（踩过的坑，别改）
+ * ────────────────────────────────────────────────────────────────────
+ *   1. 连上游时**只能**带 `Upgrade: websocket`，不能自己再发
+ *      `Connection: Upgrade` —— 否则运行时会拒绝握手，客户端看到 1006。
+ *   2. 上游的 WebSocket 必须用 `双向管道` 手工把消息在两边来回转发，
+ *      不能只把 upstream 直接返回给浏览器（那样一个字节都传不过去）。
  */
 
 const UPSTREAM_HOST = 'speech.platform.bing.com'
@@ -48,7 +52,7 @@ const UPSTREAM_PATH = '/consumer/speech/synthesize/readaloud/edge/v1'
 /** 与 edge-tts 7.2.8 保持一致的 Edge User-Agent。 */
 const EDGE_USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
-  '(KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36 Edg/143.0.0.0'
+  '(KHTML, like Gecko) Chrome/143.0.3650.75 Safari/537.36 Edg/143.0.3650.75'
 
 function corsHeaders(origin) {
   return {
@@ -57,6 +61,49 @@ function corsHeaders(origin) {
     'Access-Control-Allow-Headers': '*',
     'Access-Control-Max-Age': '86400',
   }
+}
+
+/**
+ * 把两个 WebSocket 双向对接起来。
+ *
+ * 文本帧必须原样按文本转发（浏览器发字符串，上游也期望字符串）；
+ * 二进制帧原样按二进制转发（上游回的是音频）。
+ */
+function relayPair(a, b) {
+  let closed = false
+
+  const shutdown = () => {
+    if (closed) return
+    closed = true
+    for (const socket of [a, b]) {
+      try {
+        if (socket.readyState <= 1) socket.close()
+      } catch {
+        /* 忽略 */
+      }
+    }
+  }
+
+  a.addEventListener('message', (event) => {
+    try {
+      if (b.readyState === 1) b.send(event.data)
+    } catch {
+      shutdown()
+    }
+  })
+
+  b.addEventListener('message', (event) => {
+    try {
+      if (a.readyState === 1) a.send(event.data)
+    } catch {
+      shutdown()
+    }
+  })
+
+  a.addEventListener('close', shutdown)
+  b.addEventListener('close', shutdown)
+  a.addEventListener('error', shutdown)
+  b.addEventListener('error', shutdown)
 }
 
 export default {
@@ -88,13 +135,23 @@ export default {
           ok: true,
           service: 'edge-tts websocket proxy',
           upstream: `wss://${UPSTREAM_HOST}${UPSTREAM_PATH}`,
-          usage: 'wss://<this-worker>/edge/v1?TrustedClientToken=...&ConnectionId=...',
+          usage: `wss://<this-worker>/edge/v1?TrustedClientToken=...`,
         }),
         {
           status: 200,
-          headers: { 'Content-Type': 'application/json', ...corsHeaders(origin) },
+          headers: {
+            'Content-Type': 'application/json',
+            ...corsHeaders(origin),
+          },
         },
       )
+    }
+
+    if (url.pathname !== '/edge/v1' && url.pathname !== '/edge/v1/') {
+      return new Response('not found, use /edge/v1', {
+        status: 404,
+        headers: corsHeaders(origin),
+      })
     }
 
     if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
@@ -107,46 +164,53 @@ export default {
     // 把浏览器带来的查询参数原样转给上游。
     const upstreamUrl = `https://${UPSTREAM_HOST}${UPSTREAM_PATH}${url.search}`
 
-    const upstreamRequest = new Request(upstreamUrl, {
-      method: 'GET',
-      headers: {
-        // 关键：补齐浏览器无法设置的头。
-        'User-Agent': EDGE_USER_AGENT,
-        Origin: 'chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold',
-        Pragma: 'no-cache',
-        'Cache-Control': 'no-cache',
-        'Accept-Encoding': 'gzip, deflate, br, zstd',
-        'Accept-Language': 'en-US,en;q=0.9',
-        Upgrade: 'websocket',
-        Connection: 'Upgrade',
-      },
-    })
+    let upstreamResponse
 
     try {
-      const upstreamResponse = await fetch(upstreamRequest)
-
-      // 101 会被 Cloudflare 表示成 webSocket 字段存在。
-      if (!upstreamResponse.webSocket) {
-        const body = await upstreamResponse.text().catch(() => '')
-
-        return new Response(
-          `upstream refused the websocket upgrade (HTTP ${upstreamResponse.status}). ${body.slice(0, 200)}`,
-          { status: 502, headers: corsHeaders(origin) },
-        )
-      }
-
-      upstreamResponse.webSocket.accept()
-
-      return new Response(null, {
-        status: 101,
-        webSocket: upstreamResponse.webSocket,
-        headers: corsHeaders(origin),
+      upstreamResponse = await fetch(upstreamUrl, {
+        method: 'GET',
+        headers: {
+          // 关键：补齐浏览器无法设置的头。
+          'User-Agent': EDGE_USER_AGENT,
+          Origin: 'chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold',
+          Pragma: 'no-cache',
+          'Cache-Control': 'no-cache',
+          'Accept-Encoding': 'gzip, deflate, br, zstd',
+          'Accept-Language': 'en-US,en;q=0.9',
+          // 只带 Upgrade，不要再带 Connection。
+          Upgrade: 'websocket',
+        },
       })
     } catch (error) {
-      return new Response(`proxy error: ${error?.message ?? error}`, {
+      return new Response(`proxy fetch failed: ${error?.message ?? error}`, {
         status: 502,
         headers: corsHeaders(origin),
       })
     }
+
+    if (!upstreamResponse.webSocket) {
+      const body = await upstreamResponse.text().catch(() => '')
+
+      return new Response(
+        `upstream refused the websocket upgrade (HTTP ${upstreamResponse.status}). ${body.slice(0, 200)}`,
+        { status: 502, headers: corsHeaders(origin) },
+      )
+    }
+
+    // 浏览器这一侧的 WebSocket 配对。
+    const pair = new WebSocketPair()
+    const client = pair[0]
+    const server = pair[1]
+
+    server.accept()
+    upstreamResponse.webSocket.accept()
+
+    relayPair(server, upstreamResponse.webSocket)
+
+    return new Response(null, {
+      status: 101,
+      webSocket: client,
+      headers: corsHeaders(origin),
+    })
   },
 }

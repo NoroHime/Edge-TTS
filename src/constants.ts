@@ -64,17 +64,21 @@ export const UPSTREAM_WSS_URL =
   `wss://${BASE_URL}/edge/v1?TrustedClientToken=${TRUSTED_CLIENT_TOKEN}`
 
 /**
- * 可选的代理地址（不带路径，例如 `wss://edge-tts-proxy.xxx.workers.dev`）。
+ * 可选的代理地址（例如 `wss://edge-tts-proxy.xxx.workers.dev`）。
  *
  * 在项目根目录建一个 `.env.local`：
  *
  *   VITE_EDGE_TTS_PROXY=wss://你的-worker.workers.dev
  *
  * 构建时就会被写进产物。留空则直连（只有桌面 Edge 能用）。
+ *
+ * 这里会去掉结尾多余的斜杠，避免拼出 `//edge/v1` 这种地址。
  */
 export const PROXY_URL = (
   (import.meta.env?.VITE_EDGE_TTS_PROXY as string | undefined) ?? ''
-).trim()
+)
+  .trim()
+  .replace(/\/+$/, '')
 
 /** 当前实际使用的合成地址。 */
 export const WSS_URL = PROXY_URL ? `${PROXY_URL}/edge/v1` : UPSTREAM_WSS_URL

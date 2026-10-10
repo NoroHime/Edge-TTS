@@ -79,10 +79,22 @@
 > 建议在 Worker 里设置 `ALLOWED_ORIGINS` 变量（你的站点来源），
 > 免得被别人白用，例如：`https://norohime.github.io`。
 >
-> **替代方案：**如果你不想用 Cloudflare，也可以自己在任何能跑 Node/Python
-> 的地方跑一个中转（核心逻辑就是「收到连接 → 带上 `User-Agent` 连上游 → 双向转发」）。
-> [`tools/relay-check.mjs`](tools/relay-check.mjs) 就是一个最小可用的 Node 实现，
-> 可以直接拿来当参考或改成本地服务。
+> **⚠️ 不要把 `VITE_EDGE_TTS_PROXY` 写进 `.env.local`。**
+> Vite 会**优先读取 `.env.local`**，它会覆盖掉 GitHub Actions 里的同名变量，
+> 导致「本地能跑、线上还是旧地址」。统一走 Actions 的 Variables
+> （本地开发时可以临时用 `.env.local`，但别提交，`.gitignore` 已经排除了它）。
+>
+> **替代方案：**如果你不想用 Cloudflare，可以直接跑
+> [`proxy/node-proxy.mjs`](proxy/node-proxy.mjs)（Node 版中转，逻辑同上）：
+>
+> ```bash
+> pnpm add -D ws        # 只有这个脚本需要 ws
+> node proxy/node-proxy.mjs
+> ```
+>
+> 默认监听 `ws://127.0.0.1:8787`，把 `VITE_EDGE_TTS_PROXY` 设成它就可用。
+> 注意：如果你的页面是 `https://`，浏览器不允许连 `ws://`（混合内容），
+> 这时需要把它放在 Nginx/Caddy 后面套一层 TLS，或者直接用 Cloudflare Worker 版。
 
 ### 一句话总结
 
@@ -91,6 +103,22 @@
 | 页面直连（未配置 `VITE_EDGE_TTS_PROXY`），用桌面 Edge 打开 | ✅ |
 | 页面直连，用 Chrome / 手机浏览器打开 | ❌ 必然 403 |
 | 配置了中转代理 | ✅ 任意浏览器 |
+
+### 排查顺序
+
+如果配了代理还是不行，按这个顺序查：
+
+1. **浏览器直接打开** `https://你的-worker.workers.dev/`
+   —— 应该返回 `{"ok":true,...}`。打不开说明 Worker 没部署成功。
+2. **看页面日志**（页面底部「日志」区）。走代理时错误信息会变成
+   `Edge TTS WebSocket 握手失败（HTTP 403）（已配置代理，请确认代理服务正常并且能补上 User-Agent 头）`
+   —— 说明请求确实走到代理了，但代理连上游被拒。
+3. **确认 Worker 里的代码是最新的**：连上游时只能带 `Upgrade: websocket`，
+   **不能**自己再带 `Connection: Upgrade`（带了会导致浏览器收到 WebSocket 1006），
+   而且必须用 `WebSocketPair` + 双向转发（不能只把上游 socket 返回给浏览器）。
+4. **确认线上 bundle 是新的**：在页面上按 F12，看 Network 里 JS 文件名。
+   推送代码后文件名会变（因为内容变了），如果没变就是还没部署成功。
+5. **强刷页面**（Ctrl+F5 / Cmd+Shift+R），GitHub Pages 有缓存。
 
 ---
 
@@ -350,7 +378,8 @@ Edge-TTS/
 │   ├── protocol.test.ts        # Edge TTS 协议自检（不联网）
 │   └── parity.test.ts          # 与 Python 原版对照
 ├── proxy/
-│   └── cloudflare-worker.js    # WebSocket 中转（补 User-Agent），部署到 Cloudflare Workers
+│   ├── cloudflare-worker.js    # WebSocket 中转（推荐）：部署到 Cloudflare Workers
+│   └── node-proxy.mjs          # WebSocket 中转（备选）：本机 / 服务器上跑 Node
 └── tools/
     ├── gen_reference.py        # 生成对照样例（复制自原版 Python 函数）
     ├── handshake-debug.mjs     # 打印服务端原始握手响应（证明 User-Agent 是必需的）
