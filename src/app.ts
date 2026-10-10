@@ -115,7 +115,8 @@ export class NovelTtsApp {
 
   private seeking = false
 
-  private readonly voices: VoiceOption[] = EDGE_VOICE_OPTIONS
+  /** 当前展示在下拉框里的音色；点了「获取全部」之后会换成完整列表。 */
+  private voices: VoiceOption[] = EDGE_VOICE_OPTIONS
 
   private allVoices: VoiceOption[] = EDGE_VOICE_OPTIONS
 
@@ -145,7 +146,16 @@ export class NovelTtsApp {
     // 把 utils.consolePrint 的输出同时写进页面日志。
     onLog((text) => this.appendLog(text))
 
-    this.applySettings(this.loadSettings())
+    const storedSettings = this.loadSettings()
+
+    this.applySettings(storedSettings)
+
+    // 「生成第一段后自动开始播放」默认开启：只有在用户**显式**关过
+    // （localStorage 里有 false）时才保持关闭。
+    if (storedSettings.autoPlay === undefined) {
+      this.dom.autoPlay.checked = true
+    }
+
     this.bindEvents()
     this.rebuildVoiceOptions()
     this.updateCharCount()
@@ -428,11 +438,22 @@ export class NovelTtsApp {
         )
       : this.voices
 
-    const list = matched.length > 0 ? matched : this.voices
+    // 有搜索但没匹配到时，不要偷偷回退成别的列表，而是明确显示「无匹配」。
+    const list = filter ? matched : this.voices
 
     const previous = this.dom.voice.value || this.pendingVoice
 
     this.dom.voice.innerHTML = ''
+
+    if (list.length === 0) {
+      const option = document.createElement('option')
+      option.value = ''
+      option.textContent = '没有匹配的音色'
+      option.disabled = true
+      this.dom.voice.appendChild(option)
+      this.dom.voice.value = ''
+      return
+    }
 
     for (const voice of list) {
       const option = document.createElement('option')
@@ -460,7 +481,12 @@ export class NovelTtsApp {
         throw new Error('接口返回了空列表。')
       }
 
+      // 注意：this.voices 是「当前展示的列表」。
+      // 只更新 allVoices 的话，搜索框为空时下拉框仍然读 voices，
+      // 所以界面不会变 —— 这就是「提示已获取 322 个但列表没动」的原因。
       this.allVoices = voices
+      this.voices = voices
+
       this.rebuildVoiceOptions()
       this.appendLog(`已获取 ${voices.length} 个音色。`)
       this.setStatus(`已获取 ${voices.length} 个音色。`)

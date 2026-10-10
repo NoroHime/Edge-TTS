@@ -3,6 +3,7 @@ name: Deploy to GitHub Pages
 on:
   push:
     branches: [main]
+  # 允许在 Actions 页面手动点一次「Run workflow」重新部署（不需要改代码）
   workflow_dispatch:
 
 permissions:
@@ -10,8 +11,12 @@ permissions:
   pages: write
   id-token: write
 
+# 只对「构建」做并发控制：新的一次 push 会取消**排队中/进行中**的旧构建，
+# 避免浪费 runner。注意 deploy job 不在这个 group 里 ——
+# 否则新旧两次运行会互相取消，导致最新提交永远部署不上去
+# （之前就是这样：run#4 被手动 rerun 的 run#1 取消了）。
 concurrency:
-  group: pages
+  group: pages-build
   cancel-in-progress: true
 
 jobs:
@@ -35,9 +40,9 @@ jobs:
       - name: Typecheck and build
         run: pnpm run build
         env:
-          # 中转地址（可选）：在仓库 Settings → Secrets and variables →
-          # Actions → Variables 里加一个 VITE_EDGE_TTS_PROXY 变量即可。
-          # 不配置的话，只有桌面 Edge 能正常合成（原因见 README 开头）。
+          # 中转地址：在仓库 Settings → Secrets and variables → Actions →
+          # Variables 里配置 VITE_EDGE_TTS_PROXY（不是 Environments 那一栏）。
+          # 不配置的话只有桌面 Edge 能合成，原因见 README 开头。
           VITE_EDGE_TTS_PROXY: ${{ vars.VITE_EDGE_TTS_PROXY }}
 
       - uses: actions/configure-pages@v5
